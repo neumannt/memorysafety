@@ -1,0 +1,269 @@
+<pre class='metadata'>
+Title: Towards memory safety in C++
+Shortname: D????
+Revision: 1
+Audience: EWG
+Status: D
+Group: WG21
+!URL: https://wg21.link/D????/0
+!Source: <a href="https://github.com/neumannt/memorysafety/blob/master/paper/memorysafety.bs">https://github.com/neumannt/memorysafety/blob/master/paper/memorysafety.bs</a>
+Editor: Thomas Neumann, TUM, thomas.neumann@in.tum.de
+!Date: 2022-12-22
+Markup Shorthands: markdown yes
+Abstract: The lack of memory safety is one of the most concerning limitations of C++. This paper discusses discusses mechanism to make C++ memory safe while still keeping the traditional C++ programming concepts.
+</pre>
+
+Introduction {#intro}
+=====================
+
+The lack of memory safety in C++ is a serious concern, as it is a common cause for security vulnerabilities, which has led the U.S. government
+to advise against using C++ for new projects. To stay relevant C++ should evolve to guarantee memory safety by default (with explicit escape hatches to
+allow for low-level programming techniques in the few cases these are needed).
+
+Historically C++ has already evolved to become safer, for example the introduction of smart pointers in C++11 eliminated large classes of
+memory bugs. But unfortunately it is still very easy to construct a dangling pointer when passing pointers around. In fact some new additions
+have made that even easier, for example constructing a (dangling) `string_view` from a temporary `string` is deceptively easy. That is very
+unfortunate, the language should be safe by default. We still need a mechanism for potentially unsafe operations, for example when directly
+interacting with hardware, but that should be an explicit opt-in, and limited to hopefully just a few places in the code that can then
+be carefully checked for bugs.
+
+There have been multiple proposals to improve the situation. The most radical one is to switch to another language, at least for new code,
+in particular to Rust. Rust is famous for offering memory safety while still still supporting low-level code like C++. Rust achieves this
+using its borrow checked, which guarantees that 1) an object is not destroyed (or moved) while a reference to it exists, 2) there is at
+most one mutable reference to an object, and 3) an object is not modified while an reference it exists, except potentially through the
+single mutable reference. This leads to code that is both safe and efficient, but it requires a programming model that is quite
+different from what is commonly written in C++. And in general it is difficult to migrate an existing code base to Rust.
+Rust is a great language with many nice features, but it is not well suited for piecewise replacement of C++ code. For that to be an option
+there had to be a more or less seamless interaction between Rust and C++, but that is not the case. The lack of support for inheritance
+in Rust makes accessing C++ objects problematic, and the programming patterns of Rust often look alien in C++.
+
+Less radical approaches suggest to bring lifetime annotations to C++, which would allow the compiler to detect frequent causes of bugs.
+That is a good idea, but not sufficient for the general case. We want that the compiler guarantees memory safety, having a linter
+that catches common problems is not good enough. Note that we will often only be able to guarantee memory safety in new code that
+helps the compiler with proving that the code is safe. But that is okay as long as new that code can be introduced piecewise, there must
+be a seamless interaction between the large existing code and new code.
+
+In particular, it is not an option to simply introduce the Rust borrow checker in C++. It is fundamentally incompatible with common
+C++ idioms like, e.g., iterators. Enforcing the Rust rules would require a very different program style, and would not naturally
+interact with existing code. Instead, we will introduce a different set of rules that guarantees memory safety, too, but that
+is compatible with how current C++ code looks like. Sometimes the compiler will need annotations from the programmer to
+allow for reasoning, but that should mainly affect library writers. Simple code should just work.
+And existing code can seamlessly interact with the new code. It will not magically get the safety guarantees, of course, but
+the code will work correctly, and code can migrate piecewise to the memory safe model.
+
+
+Note that in this paper we mainly introduce concepts, and do not propose a concrete syntax. In the following we introduce
+the necessary ingredients to get memory safety, and we show how that would work out for certain code tasks.
+The syntax used in the examples is pretty ad-hoc and not carefully designed. If the committee agrees that the concepts make
+sense a concrete syntax will be proposed in a separate paper.
+Note further that this paper focuses on temporal memory safety, i.e., preventing access to destroyed objects. Spatial
+memory safety is required, too, but that can be guaranteed much simpler by introducing mandatory bounds checks.
+
+Concepts {#concepts}
+====================
+
+We assume that for a long time there will be mixture of memory safe and non memory safe code. Migrating an existing
+code base takes a long time, and it has to be possible to do that incrementally. For simplicity we assume that there
+is some kind of opt-in mechanism like this mock syntax:
+
+<xmp>
+namespace oldcode {
+   // traditional C++ code
+}
+namespace newcode {
+   [[memorysafety]];
+   // everything defined in that scope enforces memory safety
+}
+namespace newcode {
+   // not migrated yet, will not check memory safety, but can
+   // call everything from oldcode and newcode
+}
+</xmp>
+
+In particular, the whole memory safety mechanism is opt-in in the sense that we generate the same machine code
+with and without memorysafety annotations, which is mandatory for piecewise migration. In particular, in the
+example `oldcode` can call `newcode` without restrictions.
+
+Within the `memorysafety` scope the compile guarantees memory safety as long as we call only code
+that is also marked with `memorysafety`. When calling code that is not marked as memory safe all checks
+are disabled and the result is assumed to be globally valid. To help with migration a compiler could emit
+a warning for such a call.
+
+Within a memory safety region the compiler guarantees that no reference to a destroyed object is
+dereferenced. Note that this is weaker than the Rust borrow checker requirement, which mandates that
+not reference to a destroyed object exists. But requiring that would be incompatible with C++ iterators,
+as seen below:
+
+<xmp>
+void foo(vector<int>& a) {
+   if (!a.empty()) {
+      auto i = a.begin();
+      if ((*i) < 5) {
+         a.push_back(3);
+         // i is invalid now,
+         // but that is okay as long as i
+         // is not dereferenced
+      }
+   }
+}
+</xmp>
+
+That is non-trivial to guarantee in general, thus we now discuss the annotations
+that we need for the compiler to deduce safety. We start with the problem of aliasing.
+Note that in the following we will use the term reference to mean both pointers and
+references.
+
+Aliasing {#aliasing}
+--------------------
+
+In order to reason about safety and the lifetime of objects that
+compiler must be able to detect if two references access the same object.
+In current C++ code that is not the case in general. Consider the following example
+
+<xmp>
+void foo(vector<int>& a, const vector<int>& b) {
+   if (!b.empty()) {
+      a.push_back(b.front());
+      // Unsafe, can crash when calling foo(x, x)
+   }
+}
+</xmp>
+
+The code looks innocent, but it is actually unsafe when `a` and `b` are aliasing each other.
+We could add a check for that to `foo`, but we want that code is safe by default. Thus, in memory
+safe code, we introduce an aliasing requirement:
+**When passing a non-const reference to a function or method, no other reference may alias that non-cost reference**.
+Violations of that requirements are rejected by the compiler. Note that the implicit `this` parameter is a reference, too.
+
+Consider these examples, calling the function `foo` from above:
+
+<xmp>
+void bar(int x, int y) {
+   vector<int> a, b;
+   array<vector<int>, 2> c;
+   foo(a,b); // ok
+   foo(a,a); // error
+   foo(c[x], c[y]); // error, cannot prove that they do not alias
+
+   auto& r1 = &c[x];
+   auto& r2 = &c[y];
+   if (&r1 != &r2)
+      foo(r1, r2); // safe now
+}
+</xmp>
+
+Alias analysis is essential for the rest of the memory safety proposal, as otherwise the compiler has no
+chance to detect unsafe operations. However we sometimes do want to allow aliasing, but that has to be
+announced to the compiler:
+
+<xmp>
+void swap(auto& a, [[mayalias(a)]] auto& b) { ... }
+</xmp>
+
+Now we can safely call `swap` with potentially aliasing arguments and the compiler will make sure that
+`swap` is safe even if `a` and `b` are the same object.
+
+Note that we made aliasing opt-in instead of opt-out as otherwise too much code breaks (a lot of code
+is unsafe when arguments alias). And we explicitly list which attributes might alias each other, which
+allows for more fine grained reasoning.
+
+Note that the aliasing mechanism only tackles the problem of direct aliases. There are also more
+subtle indirect aliasing (or rather: dependency) problems, as illustrated below, but these are caught by
+the lifetime tracking we discuss next:
+
+<xmp>
+void foo(vector<string>& a, const string& b) {
+   a.push_back(a);
+}
+void bar(vector<string>& a) {
+   // no direct alias, but nevertheless bad. Will be caught by lifetimes
+   foo(a, a.front());
+}
+</xmp>
+
+Lifetime Tracking {#lifetime}
+-----------------------------
+
+Conceptually, we have to enforce a simple rule: A reference to an object must not be
+dereferenced once the object has been destroyed. When we cannot be sure about all uses,
+for example because the reference is stored outside a local variable, the reference
+must not be exist longer than the underlying object. This forces us to keep track of
+lifetimes.
+
+Lifetimes are modeled as dependencies.
+A global object has an infinite lifetime, i.e., every object can depend on a global object. (For now we ignore the problem of global constructor/destructor order, this might require more thoughts in the future).
+A local object has a lifetime defined by its scope. When a local object is destroyed, all objects that depend upon that object must
+a) have trivial trivial destructors, and b) no methods must be called on that object.
+Consider the example below:
+
+<xmp>
+void foo(int x) {
+   int* a;
+   array<int*, 2> b;
+   int c;
+   {
+      int d = 2;
+      a = &d; // a depends on d
+      b[0] = a; // b depends on d
+      b[1] = &c; // b depends on c and d
+      *a = 3; // ok, d is alive
+   }
+   // ok so far even though we have dandling pointers
+
+   // would error: *a = 5; d is gone
+   // would error *b[x] = 5; d is gone
+}
+</xmp>
+
+When passing data from outside to a function we sometimes need explicit lifetime annotations.
+If none are given, we require that the lifetime of no reference parameter must depend on the
+lifetime of a non-cost parameter reference (or non-const global). Consider the example below:
+
+<xmp>
+void bar(int* x),
+void foo(int& x, int*& y) {
+   int* a = &x; // ok, a depends on x
+   bar(a); // ok, x is alive
+
+   // error: y might live longer than x
+   *y = a;
+}
+</xmp>
+
+Here, we have to forbid the assignment to `y` as we cannot guarantee that `y` will not be
+used after `x` has been destroyed. If we want to allow that, we have to annotate the
+function to propagate the dependency:
+
+<xmp>
+void foo(int& x, [[maycapture(x)]] int*& y) {
+   // ok, the caller can check the lifetimes of x and y
+   *y = &x;
+}
+</xmp>
+
+For class methods we add a similar annotation if we store something that depends on a reference
+argument, and we describe if the return value depends on function arguments:
+
+<xmp>
+[[returns(x,y)]] char* foo(char* x, char* y) {
+   return x < y ? x : y;
+}
+[[maycapture(x)]] void Foo::bar(int* x) {
+   this->y = x;
+}
+</xmp>
+
+Distinguish lifetime of object and content
+
+
+not sufficient, nested lifetimes, cannot modify object when inner object is referenced
+
+capturing
+
+iterators, how to make them pointer like
+
+
+uninitialized pointers, null pointers
+
+Pointer Arithmetic {#pointerarithmetic}
+=======================================
