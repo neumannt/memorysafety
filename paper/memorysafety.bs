@@ -27,6 +27,25 @@ unfortunate, the language should be safe by default. We still need a mechanism f
 interacting with hardware, but that should be an explicit opt-in, and limited to hopefully just a few places in the code that can then
 be carefully checked for bugs.
 
+Sanitizer like, e.g., the address sanitizer supported by clang and gcc allow to detect many memory safety problems at runtime, but they
+are no panacea. Consider the example code below:
+
+<xmp>
+int main() {
+   string s1 = "abcdefg";
+   string_view s2 = s1;
+   cout << s2.length() << " " << s2 << endl;
+   s1.erase(2,2);
+   cout << s2.length() << " " << s2 << endl;
+}</xmp>
+
+It is clearly an example of unsafe behavior, as the second print produces garbage output. In the case of
+`string` and `string_view` that is still relatively benign, as we only print nonsense in that case. But we
+could construct similar examples with `vector` and `span` where truly bad things would happen.
+The problem that the sanitizer have is that they do not understand the semantic of the operations. The
+underlying memory itself is still valid, but the contained objects have changed.
+
+
 There have been multiple proposals to improve the situation. The most radical one is to switch to another language, at least for new code,
 in particular to Rust. Rust is famous for offering memory safety while still still supporting low-level code like C++. Rust achieves this
 using its borrow checked, which guarantees that 1) an object is not destroyed (or moved) while a reference to it exists, 2) there is at
@@ -51,13 +70,20 @@ allow for reasoning, but that should mainly affect library writers. Simple code 
 And existing code can seamlessly interact with the new code. It will not magically get the safety guarantees, of course, but
 the code will work correctly, and code can migrate piecewise to the memory safe model.
 
+Note that the goal of this paper is mainly to show that it is possible to make C++ memory safe, and to discuss
+the challenges in doing so. We take a first stab at a mechanism that can be used to reach that goal, fully aware that there
+might be other that might work even better. Also the syntax used here is pretty ad-hoc and not carefully designed,
+this would require more work if the committee considers this approach interesting.
+But what we want to emphasize is that full memory safety is possible, and we should not aim for less when changing the
+language.
 
-Note that in this paper we mainly introduce concepts, and do not propose a concrete syntax. In the following we introduce
-the necessary ingredients to get memory safety, and we show how that would work out for certain code tasks.
-The syntax used in the examples is pretty ad-hoc and not carefully designed. If the committee agrees that the concepts make
-sense a concrete syntax will be proposed in a separate paper.
-Note further that this paper focuses on temporal memory safety, i.e., preventing access to destroyed objects. Spatial
-memory safety is required, too, but that can be guaranteed much simpler by introducing mandatory bounds checks.
+Note further that this paper focuses on temporal memory safety, i.e., preventing access to destroyed objects and
+preventing access to invalid object states. Spatial memory safety is required, too, but that can be
+guaranteed with conceptually simpler mechanisms like, e.g., preventing raw pointer arithmetic in safe code, using
+`span` with mandatory bounds checks instead, etc. We also have to forbid `reinterpret_cast`, down-cast with
+`static_cast` (`dynamic_cast` is allowed), `const_cast`, `mutable`, plain `union` (`variant` is fine), and uninitialized pointers, as these break the type system.
+These mechanism will still be available in regions that are explicitly marked as unsafe (and that are hopefully carefully checked for
+bugs).
 
 Concepts {#concepts}
 ====================
@@ -80,11 +106,12 @@ namespace newcode {
 }
 </xmp>
 
-In particular, the whole memory safety mechanism is opt-in in the sense that we generate the same machine code
+In particular, the whole memory safety mechanism is opt-in in the sense that we get the same
+memory layout and (at least conceptually) generate the same machine code
 with and without memorysafety annotations, which is mandatory for piecewise migration. In particular, in the
 example `oldcode` can call `newcode` without restrictions.
 
-Within the `memorysafety` scope the compile guarantees memory safety as long as we call only code
+Within the `memorysafety` scope the compiler guarantees memory safety as long as we call only code
 that is also marked with `memorysafety`. When calling code that is not marked as memory safe all checks
 are disabled and the result is assumed to be globally valid. To help with migration a compiler could emit
 a warning for such a call.
@@ -111,7 +138,9 @@ void foo(vector<int>& a) {
 That is non-trivial to guarantee in general, thus we now discuss the annotations
 that we need for the compiler to deduce safety. We start with the problem of aliasing.
 Note that in the following we will use the term reference to mean both pointers and
-references.
+references. To simplify the discussion we also pretend as if every modification of
+or access to of an object member happens through a corresponding access method. This
+conceptual method could always be inlined, thus it is not a real restriction in practice.
 
 Aliasing {#aliasing}
 --------------------
@@ -197,21 +226,16 @@ a) have trivial trivial destructors, and b) no methods must be called on that ob
 Consider the example below:
 
 <xmp>
-void foo(int x) {
+void foo() {
    int* a;
-   array<int*, 2> b;
-   int c;
    {
       int d = 2;
       a = &d; // a depends on d
-      b[0] = a; // b depends on d
-      b[1] = &c; // b depends on c and d
       *a = 3; // ok, d is alive
    }
-   // ok so far even though we have dandling pointers
+   // ok so far even though we have a dangling pointer
 
    // would error: *a = 5; d is gone
-   // would error *b[x] = 5; d is gone
 }
 </xmp>
 
@@ -253,17 +277,172 @@ argument, and we describe if the return value depends on function arguments:
 }
 </xmp>
 
-Distinguish lifetime of object and content
+These annotations allow use to detect when an object depends upon a destroyed object, but
+they are not sufficient to handle, e.g., the `string_view` example from the introduction.
+There, the underlying `string` still exists, but its state has changed. Similar for iterators,
+we usually have to invalidate iterators when the underlying container has changed.
+This can be annotated by capturing the _content_ of an object like this:
+
+<xmp>
+[[returns(*x)]] string_view foo(string& x) {
+   return x;
+}
+</xmp>
+
+This introduces a new rule: *When an object `a` depends on the _content_ of an object `b`,
+`a` must not be used after a non-const method of `b` has been invoked*. Note that a non-trivial
+destructor counts as use. This affects objects like `span`, `string_view`, and iterators that do
+not own the underlying object but that have to be invalidated when the underling object is modified.
+
+Conceptually this is a simple rule that says that an object state is modified only by a non-cost method,
+thus all objects that depend upon the state of an object become invalid once a non-cost method is invoked.
+In practice there are some difficulties, though, as sometimes method are intentionally non-const even though
+they do not modify the state of an object. The most prominent ones are `begin` and `end`, which do not modify
+the container itself but that do provide non-const access to container elements. Clearly, we do not want
+to invalidate all iterators when `begin` or `end` are called. Thus we mark these functions as non-mutating,
+i.e., keeping objects that depend on the content valid even though they are non-const.
+The compiler must enforce that these functions do not call other non-const functions (except those marked as nonmutating):
+
+<xmp>
+template <class T>
+[[returns(*this),nonmutating]] myvec<T>::iterator myvec<T>::begin() {
+   return iterator(this->ptr);
+}
+</xmp>
+
+This formalism handles most use cases, but there is one kind of construct that is used in
+the C++ standard library that is forbidden by the rules we have seen so far, and that is intentional
+invalidation. Consider this example fragment with a call to `std::vector::insert`:
+
+<xmp>
+a.insert(a.end(), b.begin(), b.end());
+</xmp>
+
+Our dependency rules say that `b.begin()` and `b.end()` must not depend upon
+`a`, and for good reasons. But the first argument to `insert` is different, there
+we do not only accept a dependency but we actually require that the iterator belongs
+to the same container. In many cases we will not be able to prove that statically,
+and implementing `insert` itself is also tricky because the size change of the
+`vector` invalidates the position iterator. For now we accept that implementing `insert`
+requires unsafe code (and an assert to make sure that the iterator indeed references the vector)
+and just introduce an annotation to allow this dependency:
+
+<xmp>
+template<class InputIt>
+[[returns(*this)]] iterator insert([[maydependon(this)]] const_iterator pos, InputIt first, InputIt last);
+</xmp>
+
+Dynamic Checks {#dynamicchecks}
+===============================
+
+The rules discussed so far are useful for catching many common temporal memory safety bugs, but they
+are unfortunately not sufficient to catch all of them at compile time. Perhaps somewhat surprisingly,
+the main challenge is not so much reasoning about lifetimes but aliasing. Consider this hypothetical code snipped below:
+
+<xmp>
+void f1() {
+   A a;
+   B b;
+   C c;
+   a.push_back(123);
+   f2(a, b, c);
+   f3(b);
+   f4(c);
+   f5(b);
+}
+void f2(A& a, [[maycapture(a)]] B& b, [[maycapture(a)]] C& c) {
+   b.a=&a;
+   c.a=&a;
+}
+void f3(B& b) {
+   b.i = b.a->begin();
+}
+void f4(C& c) {
+   c.a->clear();
+}
+void f5(B& b) {
+   b.e = *b.i;
+}
+</xmp>
+
+Considered in isolation, none of the functions violates any lifetime rules. `a` outlives `b` and `c`, `f2` is properly annotated as capturing,
+and each function is harmless in itself. But the combination clearly violates memory safety because `f4` invalidates the iterator
+constructed in `f3`, and the compiler has no chance to detect that, at least if the functions are defined in different compilation units,
+as `b` and `c` are separate objects.
+One could try to introduce very elaborate annotations to describe that behavior but that does not seem to be be practical would cause huge
+problems for generic code.
+
+But what we can do instead is to detect the problem at runtime. Conceptually a dependency is like a soft lock, the referenced object
+must not end before the dependent object. If it does, we consider the dependent object invalid, any operation except a trivial destructor
+will trigger an assert (and terminate the program). Similar for dependence on the content of an object, here a call to a non-const method
+will invalidate the dependent objects. In a hypothetical memory-safety-sanitizer compilation the effective code could thus look as follows
+(the sanitizer calls are here added outside the called methods instead of inside to keep the code size reasonable):
+
+<xmp>
+void f1() {
+   A a;
+   B b;
+   C c;
+   a.push_back(123);
+   f2(a, b, c);
+   f3(b);
+   f4(c);
+   f5(b);
+   memorysafety::markDestroyed(&c);
+   memorysafety::markDestroyed(&b.i);
+   memorysafety::markDestroyed(&b);
+   memorysafety::markDestroyed(&a);
+}
+void f2(A& a, [[maycapture(a)]] B& b, [[maycapture(a)]] C& c) {
+   memorysafety::addDependency(&b, &a);
+   b.a=&a;
+   memorysafety::addDependency(&c, &a);
+   c.a=&a;
+}
+void f3(B& b) {
+   memorysafety::addContentDependency(&b.i, b.a);
+   b.i = b.a->begin();
+}
+void f4(C& c) {
+   memorysafety::markModified(c.a);
+   c.a->clear();
+}
+void f5(B& b) {
+   memorysafety::validate(b.i);
+   b.e = *b.i;
+}
+</xmp>
+
+In that version the `validate` call in `f5` fails, correctly detecting that the content of
+`a` has changed.
+
+A proof-of-concept implementation of this checking infrastructure is available online [[ms]].
+Like a typical sanitizer it is implemented using associate data structures, the underlying
+objects are left untouched. The implementation is not too expensive, `validate` is in O(1),
+`markModified` and `markDestroyed` are amortized in O(1), and the dependency functions are
+logarithmic in the number of dependencies of an object. Nevertheless these checks do cause
+overhead, thus one would probably use them like a typical sanitizer, detecting dependency
+bugs in debug builds and disabling the checks in release builds.
+
+The runtime checks can handle arbitrary complex aliasing situations, and therefore one
+could ask why we even need the aliasing restrictions discussed above. The reason for these
+restrictions is that we want to detect as many problems at compile time as possible,
+and aliasing prevents that. Runtime checks are a kludge, and we would like to eliminate them
+as much as we can. Rust avoids the aliasing problem by enforcing that there can only be
+one reference to an object at any point in time if the object is currently mutable.
+But that rule is too restrictive for typical C++ programs. Thus, we accept aliasing to
+some degree. Ideally, the compiler sees all aliases, which allows for detecting
+lifetime (and content lifetime) violations at compile time. If we cannot guarantee that,
+the runtime checks handle the remaining cases.
+
+Multi Threading {#multithreading}
+=================================
 
 
-not sufficient, nested lifetimes, cannot modify object when inner object is referenced
-
-capturing
-
-iterators, how to make them pointer like
 
 
-uninitialized pointers, null pointers
-
-Pointer Arithmetic {#pointerarithmetic}
-=======================================
+<pre class=biblio>
+{
+  "ms": { "title": "Memory Safety Checks", "href": "https://github.com/neumannt/memorysafety", "authors": [ "Thomas Neumann" ] }
+}
+</pre>
