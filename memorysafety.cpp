@@ -2,6 +2,10 @@
 #include <iostream>
 #include <unordered_map>
 //---------------------------------------------------------------------------
+// C++ memory safety runtime
+// (c) 2023 Thomas Neumann
+// SPDX-License-Identifier: MIT
+//---------------------------------------------------------------------------
 namespace memorysafety {
 //---------------------------------------------------------------------------
 namespace {
@@ -90,6 +94,12 @@ class MemorySafety {
    void markModified(const void* B) noexcept;
    /// Mark an object as destroy
    void markDestroyed(const void* B) noexcept;
+   /// Reset all dependencies of A and make it valid again
+   void reset(const void* A) noexcept;
+   /// Mark an object A invalid if the other object B is invalid
+   void propagateInvalid(const void* A, const void* B) noexcept;
+   /// Like propagateInvalid, but pass over content dependencies, too
+   void propagateContent(const void* A, const void* B) noexcept;
 
    /// Is the object initialized? This only works because global objects are zero initialized
    bool isAvailable() const noexcept { return initialized; }
@@ -346,6 +356,67 @@ void MemorySafety::markDestroyed(const void* B) noexcept
    }
 }
 //---------------------------------------------------------------------------
+void MemorySafety::reset(const void* A) noexcept
+// Reset all dependencies of A and make it valid again
+{
+   auto iter = lookup.find(A);
+   if (iter != lookup.end()) {
+      // Reset all dependencies
+      iter->second.invalidate();
+      iter->second.isValid = true;
+   }
+}
+//---------------------------------------------------------------------------
+void MemorySafety::propagateInvalid(const void* A, const void* B) noexcept
+// Mark an object A invalid if the other object B is invalid
+{
+   auto iter = lookup.find(B);
+   if ((iter!=lookup.end())&&(!iter->second.isValid))
+      lookup[A].invalidate();
+}
+//---------------------------------------------------------------------------
+void MemorySafety::propagateContent(const void* A, const void* B) noexcept
+// Like propagateInvalid, but pass over content dependencies, too
+{
+   auto iter = lookup.find(B);
+   if (iter!=lookup.end()) {
+      if (!iter->second.isValid) {
+         lookup[A].invalidate();
+      } else if (iter->second.dependencies) {
+         auto& b = iter->second;
+         auto& a = lookup[A];
+         if (a.isValid) {
+
+            // Copy a dependency
+            auto process = [&](const Dependency& d) {
+               if (d.content) a.addDependency(d.B, true);
+            };
+
+            // Avoid memory allocations by using Morris traversal
+            auto iter = b.dependencies;
+            while (iter) {
+               if (!iter->left) {
+                  process(*iter);
+                  iter = iter->right;
+               } else {
+                  auto prev = iter->left;
+                  while (prev->right && prev->right != iter)
+                     prev = prev->right;
+                  if (!prev->right) {
+                     prev->right=iter;
+                     iter = iter->left;
+                  } else {
+                     prev->right = nullptr;
+                     process(*iter);
+                     iter = iter->right;
+                  }
+               }
+            }
+         }
+      }
+   }
+}
+//---------------------------------------------------------------------------
 }
 //---------------------------------------------------------------------------
 /// Assert that the object A is still valid (i.e., no dependencies are violated)
@@ -373,9 +444,32 @@ void mark_destroyed(const void* B) noexcept {
    if (logic.isAvailable()) logic.markDestroyed(B);
 }
 //---------------------------------------------------------------------------
+/// Reset all dependencies of A and make it valid again
+void reset(const void* A) noexcept {
+   if (logic.isAvailable()) logic.reset(A);
+}
+//---------------------------------------------------------------------------
+/// Mark an object A invalid if the other object B is invalid
+void propagate_invalid(const void* A, const void* B) noexcept {
+   if (logic.isAvailable()) logic.propagateInvalid(A, B);
+}
+//---------------------------------------------------------------------------
+/// Like propagate_invalid, but pass over content dependencies, too
+void propagate_content(const void* A, const void* B) noexcept {
+   if (logic.isAvailable()) logic.propagateContent(A, B);
+}
+//---------------------------------------------------------------------------
 /// Change the violation handler. By default the program is terminated, but that is not very convenient for tests
 void set_violation_handler(void (*handler)(const void*)) noexcept {
    violationHandler = handler ? handler : defaultHandler;
+}
+//---------------------------------------------------------------------------
+void assert_spatial_failed() noexcept
+// Report that an assertion failed
+{
+   if (violationHandler == defaultHandler)
+      std::cerr << "spatial memory safety assertion failed" << std::endl;
+   violationHandler(nullptr);
 }
 //---------------------------------------------------------------------------
 }
