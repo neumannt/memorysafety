@@ -388,23 +388,23 @@ void f1() {
    f3(b);
    f4(c);
    f5(b);
-   memorysafety::markDestroyed(&c);
-   memorysafety::markDestroyed(&b.i);
-   memorysafety::markDestroyed(&b);
-   memorysafety::markDestroyed(&a);
+   memorysafety::mark_destroyed(&c);
+   memorysafety::mark_destroyed(&b.i);
+   memorysafety::mark_destroyed(&b);
+   memorysafety::mark_destroyed(&a);
 }
 void f2(A& a, [[maycapture(a)]] B& b, [[maycapture(a)]] C& c) {
-   memorysafety::addDependency(&b, &a);
+   memorysafety::add_dependency(&b, &a);
    b.a=&a;
-   memorysafety::addDependency(&c, &a);
+   memorysafety::add_dependency(&c, &a);
    c.a=&a;
 }
 void f3(B& b) {
-   memorysafety::addContentDependency(&b.i, b.a);
+   memorysafety::add_content_dependency(&b.i, b.a);
    b.i = b.a->begin();
 }
 void f4(C& c) {
-   memorysafety::markModified(c.a);
+   memorysafety::mark_modified(c.a);
    c.a->clear();
 }
 void f5(B& b) {
