@@ -10,7 +10,7 @@ Group: WG21
 Editor: Thomas Neumann, TUM, thomas.neumann@in.tum.de
 !Date: 2022-12-22
 Markup Shorthands: markdown yes
-Abstract: The lack of memory safety is one of the most concerning limitations of C++. This paper discusses discusses mechanism to make C++ memory safe while still keeping the traditional C++ programming concepts.
+Abstract: The lack of memory safety is one of the most concerning limitations of C++. This paper discusses a mechanism to make C++ memory safe while still keeping the traditional C++ programming concepts.
 </pre>
 
 Introduction {#intro}
@@ -23,11 +23,11 @@ allow for low-level programming techniques in the few cases these are needed).
 Historically C++ has already evolved to become safer, for example the introduction of smart pointers in C++11 eliminated large classes of
 memory bugs. But unfortunately it is still very easy to construct a dangling pointer when passing pointers around. In fact some new additions
 have made that even easier, for example constructing a (dangling) `string_view` from a temporary `string` is deceptively easy. That is very
-unfortunate, the language should be safe by default. We still need a mechanism for potentially unsafe operations, for example when directly
+unfortunate, the language should be safe by default. Some programs will still need a mechanism for potentially unsafe operations, for example when directly
 interacting with hardware, but that should be an explicit opt-in, and limited to hopefully just a few places in the code that can then
 be carefully checked for bugs.
 
-Sanitizer like, e.g., the address sanitizer supported by clang and gcc allow to detect many memory safety problems at runtime, but they
+Sanitizer like, e.g., the address sanitizer supported by clang and gcc allows detecting many memory safety problems at runtime, but they
 are no panacea. Consider the example code below:
 
 <xmp>
@@ -42,24 +42,24 @@ int main() {
 It is clearly an example of unsafe behavior, as the second print produces garbage output. In the case of
 `string` and `string_view` that is still relatively benign, as we only print nonsense in that case. But we
 could construct similar examples with `vector` and `span` where truly bad things would happen.
-The problem that the sanitizer have is that they do not understand the semantic of the operations. The
+The difficulty that the sanitizers have is that they do not understand the semantic of the operations. The
 underlying memory itself is still valid, but the contained objects have changed.
 
 
 There have been multiple proposals to improve the situation. The most radical one is to switch to another language, at least for new code,
-in particular to Rust. Rust is famous for offering memory safety while still still supporting low-level code like C++. Rust achieves this
-using its borrow checked, which guarantees that 1) an object is not destroyed (or moved) while a reference to it exists, 2) there is at
-most one mutable reference to an object, and 3) an object is not modified while an reference it exists, except potentially through the
+in particular to Rust. Rust is famous for offering memory safety while still supporting low-level code like C++. Rust achieves this
+using its borrow checker, which guarantees that 1) an object is not destroyed (or moved) while a reference to it exists, 2) there is at
+most one mutable reference to an object, and 3) an object is not modified while a reference to it exists, except potentially through the
 single mutable reference. This leads to code that is both safe and efficient, but it requires a programming model that is quite
 different from what is commonly written in C++. And in general it is difficult to migrate an existing code base to Rust.
-Rust is a great language with many nice features, but it is not well suited for piecewise replacement of C++ code. For that to be an option
+Rust is a great language with many nice features, but it is not well suited for piece wise replacement of C++ code. For that to be an option
 there had to be a more or less seamless interaction between Rust and C++, but that is not the case. The lack of support for inheritance
 in Rust makes accessing C++ objects problematic, and the programming patterns of Rust often look alien in C++.
 
-Less radical approaches suggest to bring lifetime annotations to C++, which would allow the compiler to detect frequent causes of bugs.
+Less radical approaches suggest bringing lifetime annotations to C++, which would allow the compiler to detect frequent causes of bugs.
 That is a good idea, but not sufficient for the general case. We want that the compiler guarantees memory safety, having a linter
-that catches common problems is not good enough. Note that we will often only be able to guarantee memory safety in new code that
-helps the compiler with proving that the code is safe. But that is okay as long as new that code can be introduced piecewise, there must
+that catches common problems is not good enough. Note that we will frequently only be able to guarantee memory safety in new code that
+helps the compiler with proving that the code is safe. But that is okay as long as new that code can be introduced piece wise, there must
 be a seamless interaction between the large existing code and new code.
 
 In particular, it is not an option to simply introduce the Rust borrow checker in C++. It is fundamentally incompatible with common
@@ -68,11 +68,11 @@ interact with existing code. Instead, we will introduce a different set of rules
 is compatible with how current C++ code looks like. Sometimes the compiler will need annotations from the programmer to
 allow for reasoning, but that should mainly affect library writers. Simple code should just work.
 And existing code can seamlessly interact with the new code. It will not magically get the safety guarantees, of course, but
-the code will work correctly, and code can migrate piecewise to the memory safe model.
+the code will work correctly, and code can migrate piece wise to the memory safe model.
 
 Note that the goal of this paper is mainly to show that it is possible to make C++ memory safe, and to discuss
 the challenges in doing so. We take a first stab at a mechanism that can be used to reach that goal, fully aware that there
-might be other that might work even better. Also the syntax used here is pretty ad-hoc and not carefully designed,
+might be others that might work even better. Also, the syntax used here is pretty ad-hoc and not carefully designed,
 this would require more work if the committee considers this approach interesting.
 But what we want to emphasize is that full memory safety is possible, and we should not aim for less when changing the
 language.
@@ -82,14 +82,14 @@ preventing access to invalid object states. Spatial memory safety is required, t
 guaranteed with conceptually simpler mechanisms like, e.g., preventing raw pointer arithmetic in safe code, using
 `span` with mandatory bounds checks instead, etc. We also have to forbid `reinterpret_cast`, down-cast with
 `static_cast` (`dynamic_cast` is allowed), `const_cast`, `mutable`, plain `union` (`variant` is fine), and uninitialized pointers, as these break the type system.
-These mechanism will still be available in regions that are explicitly marked as unsafe (and that are hopefully carefully checked for
+These mechanisms will still be available in regions that are explicitly marked as unsafe (and that are hopefully carefully checked for
 bugs).
 
 Concepts {#concepts}
 ====================
 
 We assume that for a long time there will be mixture of memory safe and non memory safe code. Migrating an existing
-code base takes a long time, and it has to be possible to do that incrementally. For simplicity we assume that there
+code base takes a long time, and it has to be possible to do that incrementally. For simplicity, we assume that there
 is some kind of opt-in mechanism like this mock syntax:
 
 <xmp>
@@ -108,7 +108,7 @@ namespace newcode {
 
 In particular, the whole memory safety mechanism is opt-in in the sense that we get the same
 memory layout and (at least conceptually) generate the same machine code
-with and without memorysafety annotations, which is mandatory for piecewise migration. In particular, in the
+with and without memorysafety annotations, which is mandatory for piece wise migration. In particular, in the
 example `oldcode` can call `newcode` without restrictions.
 
 Within the `memorysafety` scope the compiler guarantees memory safety as long as we call only code
@@ -145,7 +145,7 @@ conceptual method could always be inlined, thus it is not a real restriction in 
 Aliasing {#aliasing}
 --------------------
 
-In order to reason about safety and the lifetime of objects that
+In order to reason about safety and the lifetime of objects the
 compiler must be able to detect if two references access the same object.
 In current C++ code that is not the case in general. Consider the following example
 
@@ -182,7 +182,7 @@ void bar(int x, int y) {
 </xmp>
 
 Alias analysis is essential for the rest of the memory safety proposal, as otherwise the compiler has no
-chance to detect unsafe operations. However we sometimes do want to allow aliasing, but that has to be
+chance to detect unsafe operations. However, we sometimes do want to allow aliasing, but that has to be
 announced to the compiler:
 
 <xmp>
@@ -194,7 +194,7 @@ Now we can safely call `swap` with potentially aliasing arguments and the compil
 
 Note that we made aliasing opt-in instead of opt-out as otherwise too much code breaks (a lot of code
 is unsafe when arguments alias). And we explicitly list which attributes might alias each other, which
-allows for more fine grained reasoning.
+allows for more fine-grained reasoning.
 
 Note that the aliasing mechanism only tackles the problem of direct aliases. There are also more
 subtle indirect aliasing (or rather: dependency) problems, as illustrated below, but these are caught by
@@ -216,13 +216,13 @@ Lifetime Tracking {#lifetime}
 Conceptually, we have to enforce a simple rule: A reference to an object must not be
 dereferenced once the object has been destroyed. When we cannot be sure about all uses,
 for example because the reference is stored outside a local variable, the reference
-must not be exist longer than the underlying object. This forces us to keep track of
+must not exist longer than the underlying object. This forces us to keep track of
 lifetimes.
 
 Lifetimes are modeled as dependencies.
 A global object has an infinite lifetime, i.e., every object can depend on a global object. (For now we ignore the problem of global constructor/destructor order, this might require more thoughts in the future).
 A local object has a lifetime defined by its scope. When a local object is destroyed, all objects that depend upon that object must
-a) have trivial trivial destructors, and b) no methods must be called on that object.
+a) have trivial destructors, and b) no methods must be called on that object.
 Consider the example below:
 
 <xmp>
@@ -292,14 +292,14 @@ This can be annotated by capturing the _content_ of an object like this:
 This introduces a new rule: *When an object `a` depends on the _content_ of an object `b`,
 `a` must not be used after a non-const method of `b` has been invoked*. Note that a non-trivial
 destructor counts as use. This affects objects like `span`, `string_view`, and iterators that do
-not own the underlying object but that have to be invalidated when the underling object is modified.
+not own the underlying object, but that have to be invalidated when the underling object is modified.
 
 Conceptually this is a simple rule that says that an object state is modified only by a non-cost method,
 thus all objects that depend upon the state of an object become invalid once a non-cost method is invoked.
 In practice there are some difficulties, though, as sometimes method are intentionally non-const even though
 they do not modify the state of an object. The most prominent ones are `begin` and `end`, which do not modify
-the container itself but that do provide non-const access to container elements. Clearly, we do not want
-to invalidate all iterators when `begin` or `end` are called. Thus we mark these functions as non-mutating,
+the container itself, but that do provide non-const access to container elements. Clearly, we do not want
+to invalidate all iterators when `begin` or `end` are called. Thus, we mark these functions as non-mutating,
 i.e., keeping objects that depend on the content valid even though they are non-const.
 The compiler must enforce that these functions do not call other non-const functions (except those marked as nonmutating):
 
@@ -369,11 +369,11 @@ Considered in isolation, none of the functions violates any lifetime rules. `a` 
 and each function is harmless in itself. But the combination clearly violates memory safety because `f4` invalidates the iterator
 constructed in `f3`, and the compiler has no chance to detect that, at least if the functions are defined in different compilation units,
 as `b` and `c` are separate objects.
-One could try to introduce very elaborate annotations to describe that behavior but that does not seem to be be practical would cause huge
+One could try to introduce very elaborate annotations to describe that behavior, but that does not seem to be practical and would cause huge
 problems for generic code.
 
 But what we can do instead is to detect the problem at runtime. Conceptually a dependency is like a soft lock, the referenced object
-must not end before the dependent object. If it does, we consider the dependent object invalid, any operation except a trivial destructor
+must not end its lifetime before the dependent object. If it does, we consider the dependent object invalid, any operation except a trivial destructor
 will trigger an assert (and terminate the program). Similar for dependence on the content of an object, here a call to a non-const method
 will invalidate the dependent objects. In a hypothetical memory-safety-sanitizer compilation the effective code could thus look as follows
 (the sanitizer calls are here added outside the called methods instead of inside to keep the code size reasonable):
@@ -383,6 +383,7 @@ void f1() {
    A a;
    B b;
    C c;
+   memorysafety::mark_modified(&a);
    a.push_back(123);
    f2(a, b, c);
    f3(b);
@@ -400,7 +401,7 @@ void f2(A& a, [[maycapture(a)]] B& b, [[maycapture(a)]] C& c) {
    c.a=&a;
 }
 void f3(B& b) {
-   memorysafety::add_content_dependency(&b.i, b.a);
+   memorysafety::add_content_dependency(&b.i, &b.a);
    b.i = b.a->begin();
 }
 void f4(C& c) {
@@ -419,8 +420,8 @@ In that version the `validate` call in `f5` fails, correctly detecting that the 
 A proof-of-concept implementation of this checking infrastructure is available online [[ms]].
 Like a typical sanitizer it is implemented using associate data structures, the underlying
 objects are left untouched. The implementation is not too expensive, `validate` is in O(1),
-`markModified` and `markDestroyed` are amortized in O(1), and the dependency functions are
-logarithmic in the number of dependencies of an object. Nevertheless these checks do cause
+`mark_modified` and `mark_destroyed` are amortized in O(1), and the dependency functions are
+logarithmic in the number of dependencies of an object. Nevertheless, these checks do cause
 overhead, thus one would probably use them like a typical sanitizer, detecting dependency
 bugs in debug builds and disabling the checks in release builds.
 
@@ -438,8 +439,71 @@ the runtime checks handle the remaining cases.
 Multi Threading {#multithreading}
 =================================
 
+Even though this paper concentrates on temporal memory safety in the single threaded case,
+we ultimately need a solution for multi-thread memory safety, too. The only objects that
+are safe to share between threads are const objects, atomics, objects that are explicitly marked
+as thread-safe and that guarantee correctness themselves, and compounds of the former categories.
+To simplify building thread-safe objects the standard library should probably provide something
+like a `locked<T>` wrapper, that combines the `T` with a mutex and that only allows access to
+the underlying object via a callback mechanism:
 
+<xmp>
+locked<vector<int>> foo;
+...
+foo.apply([](vector<int>& c) {
+   // This is implicitly protected by a mutex
+   c.push_back(1);
+   // The reference to c must not be captured
+});
+</xmp>
 
+When we disallow capturing the pointer to the protected object (which we can, by forbidding capturing
+dependencies on the object) we can make sure that the object will only be accessed under the mutex,
+guaranteeing thread safety for that object.
+When creating a new thread we must make sure that only thread safe objects can be passed by reference
+to the next thread.
+
+One problem we still have with that approach is that global objects are implicitly shared between threads.
+Insisting that all global objects are thread-safe is impractical, in particular it would make simple programs
+that rely upon global state for simplicity much more complex. It seems more promising to do something similar
+to what the programming language `D` does, where globals are thread-local by default. Making all non-constants
+globals implicitly thread-local, and insisting on the thread-safety properties mentioned above for objects
+that are marked as shared might be one way to introduce thread safety in C++.
+
+Open Questions {#openquestions}
+===============================
+
+The approach sketched above guarantees temporal memory safety by keeping tack of dependencies between objects,
+both concerning the existence of objects and the content of objects, and by enforcing that an object
+is no longer after if its dependencies became invalidated. Syntax questions aside, there are still some open
+questions concerning this approach. In particular the balance between compile time checks and runtime checks
+is important. Clearly, we want to detect as many problems as we can at compile time. And conversely, we
+want to eliminate runtime checks as far as we can. It should be possible to eliminate some checks when,
+e.g., we can proof that a reference never escapes and no alias as constructed and thus no dependency violation
+can occur. But it is not clear yet to best identify these situations. And perhaps some additional annotations
+could help the compiler to better reason about safety.
+
+Furthermore, we need to combine temporal memory safety with spatial memory safety. The proof-of-concept
+implementation in [[ms]] provides a string implementation that offers both temporal and spatial memory
+safety in its iterators, but it introduces a bounds check at every iterator dereference. In theory that
+is not always necessary. For example the following code is guaranteed to be safe:
+
+<xmp>
+string foo;
+for (char c:foo) {
+   ...
+}
+</xmp>
+
+The dependency rules make sure that the iterators used by the for loop stay valid, thus we do not need
+any bounds checks. Manual iterator operations however could very well go beyond the `end()` iterator and
+thus need bounds checks. Can we somehow differentiate these cases at compile time?
+
+And finally we require a better solution for global objects. The multi-threading problems were already
+discussed above, but the undefined initialization order is not acceptable either. When a global object
+`A` depends on a global object `B`, `B` must be initialized before `A`. Currently there is no universal
+mechanism to guarantee that, let alone a fully automatic mechanism provided by the compiler. This has
+to be addressed, too, to reach full memory safety.
 
 <pre class=biblio>
 {
