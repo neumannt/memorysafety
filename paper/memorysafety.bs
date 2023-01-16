@@ -1,16 +1,16 @@
 <pre class='metadata'>
 Title: Towards memory safety in C++
-Shortname: D????
-Revision: 1
+Shortname: D2771
+Revision: 0
 Audience: EWG
 Status: D
 Group: WG21
-!URL: https://wg21.link/D????/0
+!URL: https://wg21.link/D2771/0
 !Source: <a href="https://github.com/neumannt/memorysafety/blob/master/paper/memorysafety.bs">https://github.com/neumannt/memorysafety/blob/master/paper/memorysafety.bs</a>
 Editor: Thomas Neumann, TUM, thomas.neumann@in.tum.de
 !Date: 2022-12-22
 Markup Shorthands: markdown yes
-Abstract: The lack of memory safety is one of the most concerning limitations of C++. This paper discusses a mechanism to make C++ memory safe while still keeping the traditional C++ programming concepts.
+Abstract: The lack of memory safety is one of the most concerning limitations of C++. This paper discusses a mechanism to make C++ memory safe while still keeping the traditional C++ programming concepts. By keeping track of dependencies between objects we can guarantee that an object will not be used after its dependencies have been destroyed or invalidated, which gives us temporal memory safety.
 </pre>
 
 Introduction {#intro}
