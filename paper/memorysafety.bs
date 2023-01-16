@@ -27,7 +27,7 @@ unfortunate, the language should be safe by default. Some programs will still ne
 interacting with hardware, but that should be an explicit opt-in, and limited to hopefully just a few places in the code that can then
 be carefully checked for bugs.
 
-Sanitizer like, e.g., the address sanitizer supported by clang and gcc allows detecting many memory safety problems at runtime, but they
+Sanitizer like, e.g., the address sanitizer supported by clang and gcc allow detecting many memory safety problems at runtime, but they
 are no panacea. Consider the example code below:
 
 <xmp>
@@ -85,6 +85,15 @@ guaranteed with conceptually simpler mechanisms like, e.g., preventing raw point
 These mechanisms will still be available in regions that are explicitly marked as unsafe (and that are hopefully carefully checked for
 bugs).
 
+The approach presented here guarantees temporal memory safety by keeping track of dependencies. When an object A (e.g., a `reference_wrapper`) depends
+on an object B, we must not use A after B has been destroyed. We consider that a dependency on the existence of an object.
+Similar, when an object A (e.g., a `string_view` or an iterator) depends on the content of an object B, we must not use A after B has been modified.
+We consider that a dependency on the content of an object. When we enforce both types of dependencies in the program we can guarantee temporal memory safety.
+
+We already have a proof-of-concept implementation that guarantees memory safety using dependency tracking [[ms]], but without compiler
+support the dependencies have to be annotated and checked manually, which is undesirable. In the following we will therefore
+introduce mechanisms to allow the compiler to reason about dependencies and reference aliases, which is essential to enforce the invariants described above automatically.
+
 Concepts {#concepts}
 ====================
 
@@ -118,7 +127,7 @@ a warning for such a call.
 
 Within a memory safety region the compiler guarantees that no reference to a destroyed object is
 dereferenced. Note that this is weaker than the Rust borrow checker requirement, which mandates that
-not reference to a destroyed object exists. But requiring that would be incompatible with C++ iterators,
+no reference to a destroyed object exists. But requiring that would be incompatible with C++ iterators,
 as seen below:
 
 <xmp>
@@ -202,7 +211,7 @@ the dependency tracking we discuss next:
 
 <xmp>
 void foo(vector<string>& a, const string& b) {
-   a.push_back(a);
+   a.push_back(b);
 }
 void bar(vector<string>& a) {
    // no direct alias, but nevertheless bad. Will be caught by dependencies
@@ -277,7 +286,7 @@ argument, and we describe if the return value depends on function arguments:
 }
 </xmp>
 
-These annotations allow use to detect when an object depends upon a destroyed object, but
+These annotations allow us to detect when an object depends upon a destroyed object, but
 they are not sufficient to handle, e.g., the `string_view` example from the introduction.
 There, the underlying `string` still exists, but its state has changed. Similar for iterators,
 we usually have to invalidate iterators when the underlying container has changed.
@@ -289,8 +298,8 @@ This can be annotated by capturing the _content_ of an object like this:
 }
 </xmp>
 
-This introduces a new rule: *When an object `a` depends on the _content_ of an object `b`,
-`a` must not be used after a non-const method of `b` has been invoked*. Note that a non-trivial
+This introduces a new rule: **When an object A depends on the _content_ of an object B,
+A must not be used after a non-const method of B has been invoked**. Note that a non-trivial
 destructor counts as use. This affects objects like `span`, `string_view`, and iterators that do
 not own the underlying object, but that have to be invalidated when the underling object is modified.
 
@@ -310,7 +319,8 @@ template <class T>
 }
 </xmp>
 
-Note that these rules allow us to detect the `a.push_back(a.front())` example mentioned above. The result of
+The third dependency rule that we introduce is that **a function argument must not depend on another non-const function argument**.
+That rule allows us to detect the `a.push_back(a.front())` example mentioned above. The result of
 `a.front()` depends on the content of `a`, which prevents it from being passed as an argument
 to `a.push_back(...)`.
 
@@ -405,10 +415,12 @@ void f2(A& a, [[maycapture(a)]] B& b, [[maycapture(a)]] C& c) {
    c.a=&a;
 }
 void f3(B& b) {
-   memorysafety::add_content_dependency(&b.i, &b.a);
+   memorysafety::validate(b.a);
+   memorysafety::add_content_dependency(&b.i, b.a);
    b.i = b.a->begin();
 }
 void f4(C& c) {
+   memorysafety::validate(c.a);
    memorysafety::mark_modified(c.a);
    c.a->clear();
 }
@@ -483,8 +495,8 @@ is no longer used after its dependencies became invalidated. Syntax questions as
 questions concerning this approach. In particular the balance between compile time checks and runtime checks
 is important. Clearly, we want to detect as many problems as we can at compile time. And conversely, we
 want to eliminate runtime checks as far as we can. It should be possible to eliminate some checks when,
-e.g., we can proof that a reference never escapes and no alias as constructed and thus no dependency violation
-can occur. But it is not clear yet to best identify these situations. And perhaps some additional annotations
+e.g., we can proof that a reference never escapes and no alias is constructed and thus no dependency violation
+can occur. But it is not clear yet how to best identify these situations. And perhaps some additional annotations
 could help the compiler to better reason about safety.
 
 Furthermore, we need to combine temporal memory safety with spatial memory safety. The proof-of-concept
