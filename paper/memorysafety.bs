@@ -198,20 +198,20 @@ allows for more fine-grained reasoning.
 
 Note that the aliasing mechanism only tackles the problem of direct aliases. There are also more
 subtle indirect aliasing (or rather: dependency) problems, as illustrated below, but these are caught by
-the lifetime tracking we discuss next:
+the dependency tracking we discuss next:
 
 <xmp>
 void foo(vector<string>& a, const string& b) {
    a.push_back(a);
 }
 void bar(vector<string>& a) {
-   // no direct alias, but nevertheless bad. Will be caught by lifetimes
+   // no direct alias, but nevertheless bad. Will be caught by dependencies
    foo(a, a.front());
 }
 </xmp>
 
-Lifetime Tracking {#lifetime}
------------------------------
+Dependency Tracking {#dependencies}
+-----------------------------------
 
 Conceptually, we have to enforce a simple rule: A reference to an object must not be
 dereferenced once the object has been destroyed. When we cannot be sure about all uses,
@@ -269,7 +269,7 @@ For class methods we add a similar annotation if we store something that depends
 argument, and we describe if the return value depends on function arguments:
 
 <xmp>
-[[returns(x,y)]] char* foo(char* x, char* y) {
+[[dependson(x,y)]] char* foo(char* x, char* y) {
    return x < y ? x : y;
 }
 [[maycapture(x)]] void Foo::bar(int* x) {
@@ -284,7 +284,7 @@ we usually have to invalidate iterators when the underlying container has change
 This can be annotated by capturing the _content_ of an object like this:
 
 <xmp>
-[[returns(*x)]] string_view foo(string& x) {
+[[dependson(*x)]] string_view foo(string& x) {
    return x;
 }
 </xmp>
@@ -305,10 +305,14 @@ The compiler must enforce that these functions do not call other non-const funct
 
 <xmp>
 template <class T>
-[[returns(*this),nonmutating]] myvec<T>::iterator myvec<T>::begin() {
+[[dependson(*this),nonmutating]] myvec<T>::iterator myvec<T>::begin() {
    return iterator(this->ptr);
 }
 </xmp>
+
+Note that these rules allow us to detect the `a.push_back(a.front())` example mentioned above. The result of
+`a.front()` depends on the content of `a`, which prevents it from being passed as an argument
+to `a.push_back(...)`.
 
 This formalism handles most use cases, but there is one kind of construct that is used in
 the C++ standard library that is forbidden by the rules we have seen so far, and that is intentional
@@ -329,7 +333,7 @@ and just introduce an annotation to allow this dependency:
 
 <xmp>
 template<class InputIt>
-[[returns(*this)]] iterator insert([[maydependon(this)]] const_iterator pos, InputIt first, InputIt last);
+[[dependson(*this)]] iterator insert([[maydependon(this)]] const_iterator pos, InputIt first, InputIt last);
 </xmp>
 
 Dynamic Checks {#dynamicchecks}
@@ -374,7 +378,7 @@ problems for generic code.
 
 But what we can do instead is to detect the problem at runtime. Conceptually a dependency is like a soft lock, the referenced object
 must not end its lifetime before the dependent object. If it does, we consider the dependent object invalid, any operation except a trivial destructor
-will trigger an assert (and terminate the program). Similar for dependence on the content of an object, here a call to a non-const method
+will trigger an assert (and terminate the program). Similar for dependencies on the content of an object, here a call to a non-const method
 will invalidate the dependent objects. In a hypothetical memory-safety-sanitizer compilation the effective code could thus look as follows
 (the sanitizer calls are here added outside the called methods instead of inside to keep the code size reasonable):
 
@@ -409,7 +413,7 @@ void f4(C& c) {
    c.a->clear();
 }
 void f5(B& b) {
-   memorysafety::validate(b.i);
+   memorysafety::validate(&b.i);
    b.e = *b.i;
 }
 </xmp>
@@ -433,7 +437,7 @@ as much as we can. Rust avoids the aliasing problem by enforcing that there can 
 one reference to an object at any point in time if the object is currently mutable.
 But that rule is too restrictive for typical C++ programs. Thus, we accept aliasing to
 some degree. Ideally, the compiler sees all aliases, which allows for detecting
-lifetime (and content lifetime) violations at compile time. If we cannot guarantee that,
+dependency (and content dependency) violations at compile time. If we cannot guarantee that,
 the runtime checks handle the remaining cases.
 
 Multi Threading {#multithreading}
@@ -475,7 +479,7 @@ Open Questions {#openquestions}
 
 The approach sketched above guarantees temporal memory safety by keeping tack of dependencies between objects,
 both concerning the existence of objects and the content of objects, and by enforcing that an object
-is no longer after if its dependencies became invalidated. Syntax questions aside, there are still some open
+is no longer used after its dependencies became invalidated. Syntax questions aside, there are still some open
 questions concerning this approach. In particular the balance between compile time checks and runtime checks
 is important. Clearly, we want to detect as many problems as we can at compile time. And conversely, we
 want to eliminate runtime checks as far as we can. It should be possible to eliminate some checks when,
