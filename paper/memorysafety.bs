@@ -17,7 +17,7 @@ Introduction {#intro}
 =====================
 
 The lack of memory safety in C++ is a serious concern, as it is a common cause for security vulnerabilities, which has led the U.S. government
-to advise against using C++ for new projects. To stay relevant C++ should evolve to guarantee memory safety by default (with explicit escape hatches to
+to advise against using C++ for new projects. To stay relevant, C++ should evolve to guarantee memory safety by default (with explicit escape hatches to
 allow for low-level programming techniques in the few cases these are needed).
 
 Historically C++ has already evolved to become safer, for example the introduction of smart pointers in C++11 eliminated large classes of
@@ -42,7 +42,7 @@ int main() {
 It is clearly an example of unsafe behavior, as the second print produces garbage output. In the case of
 `string` and `string_view` that is still relatively benign, as we only print nonsense in that case. But we
 could construct similar examples with `vector` and `span` where truly bad things would happen.
-The difficulty that the sanitizers have is that they do not understand the semantic of the operations. The
+The difficulty that the sanitizers have is that they do not understand the semantics of the operations. The
 underlying memory itself is still valid, but the contained objects have changed.
 
 
@@ -154,7 +154,7 @@ conceptual method could always be inlined, thus it is not a real restriction in 
 Aliasing {#aliasing}
 --------------------
 
-In order to reason about safety and the lifetime of objects the
+In order to reason about safety and the lifetime of objects, the
 compiler must be able to detect if two references access the same object.
 In current C++ code that is not the case in general. Consider the following example
 
@@ -202,7 +202,7 @@ Now we can safely call `swap` with potentially aliasing arguments and the compil
 `swap` is safe even if `a` and `b` are the same object.
 
 Note that we made aliasing opt-in instead of opt-out as otherwise too much code breaks (a lot of code
-is unsafe when arguments alias). And we explicitly list which attributes might alias each other, which
+is unsafe when arguments alias). And we explicitly list which arguments might alias each other, which
 allows for more fine-grained reasoning.
 
 Note that the aliasing mechanism only tackles the problem of direct aliases. There are also more
@@ -290,7 +290,7 @@ These annotations allow us to detect when an object depends upon a destroyed obj
 they are not sufficient to handle, e.g., the `string_view` example from the introduction.
 There, the underlying `string` still exists, but its state has changed. Similar for iterators,
 we usually have to invalidate iterators when the underlying container has changed.
-This can be annotated by capturing the _content_ of an object like this:
+This can be annotated by capturing the __content__ of an object like this:
 
 <xmp>
 [[dependson(*x)]] string_view foo(string& x) {
@@ -298,14 +298,14 @@ This can be annotated by capturing the _content_ of an object like this:
 }
 </xmp>
 
-This introduces a new rule: **When an object A depends on the _content_ of an object B,
+This introduces a new rule: **When an object A depends on the __content__ of an object B,
 A must not be used after a non-const method of B has been invoked**. Note that a non-trivial
 destructor counts as use. This affects objects like `span`, `string_view`, and iterators that do
-not own the underlying object, but that have to be invalidated when the underling object is modified.
+not own the underlying object, but that have to be invalidated when the underlying object is modified.
 
 Conceptually this is a simple rule that says that an object state is modified only by a non-cost method,
 thus all objects that depend upon the state of an object become invalid once a non-cost method is invoked.
-In practice there are some difficulties, though, as sometimes method are intentionally non-const even though
+In practice there are some difficulties, though, as sometimes methods are intentionally non-const even though
 they do not modify the state of an object. The most prominent ones are `begin` and `end`, which do not modify
 the container itself, but that do provide non-const access to container elements. Clearly, we do not want
 to invalidate all iterators when `begin` or `end` are called. Thus, we mark these functions as non-mutating,
@@ -351,7 +351,7 @@ Dynamic Checks {#dynamicchecks}
 
 The rules discussed so far are useful for catching many common temporal memory safety bugs, but they
 are unfortunately not sufficient to catch all of them at compile time. Perhaps somewhat surprisingly,
-the main challenge is not so much reasoning about lifetimes but aliasing. Consider this hypothetical code snipped below:
+the main challenge is not so much reasoning about lifetimes but aliasing. Consider this hypothetical code snippet below:
 
 <xmp>
 void f1() {
@@ -459,8 +459,8 @@ Even though this paper concentrates on temporal memory safety in the single thre
 we ultimately need a solution for multi-thread memory safety, too. The only objects that
 are safe to share between threads are const objects, atomics, objects that are explicitly marked
 as thread-safe and that guarantee correctness themselves, and compounds of the former categories.
-To simplify building thread-safe objects the standard library should probably provide something
-like a `locked<T>` wrapper, that combines the `T` with a mutex and that only allows access to
+To simplify building thread-safe objects, the standard library should probably provide something
+like a `locked<T>` wrapper that combines the `T` with a mutex and that only allows access to
 the underlying object via a callback mechanism:
 
 <xmp>
@@ -474,9 +474,9 @@ foo.apply([](vector<int>& c) {
 </xmp>
 
 When we disallow capturing the pointer to the protected object (which we can, by forbidding capturing
-dependencies on the object) we can make sure that the object will only be accessed under the mutex,
+dependencies on the object), we can make sure that the object will only be accessed under the mutex,
 guaranteeing thread safety for that object.
-When creating a new thread we must make sure that only thread safe objects can be passed by reference
+When creating a new thread we must make sure that only thread-safe objects can be passed by reference
 to the next thread.
 
 One problem we still have with that approach is that global objects are implicitly shared between threads.
@@ -489,13 +489,13 @@ that are marked as shared might be one way to introduce thread safety in C++.
 Open Questions {#openquestions}
 ===============================
 
-The approach sketched above guarantees temporal memory safety by keeping tack of dependencies between objects,
+The approach sketched above guarantees temporal memory safety by keeping track of dependencies between objects,
 both concerning the existence of objects and the content of objects, and by enforcing that an object
 is no longer used after its dependencies became invalidated. Syntax questions aside, there are still some open
 questions concerning this approach. In particular the balance between compile time checks and runtime checks
 is important. Clearly, we want to detect as many problems as we can at compile time. And conversely, we
 want to eliminate runtime checks as far as we can. It should be possible to eliminate some checks when,
-e.g., we can proof that a reference never escapes and no alias is constructed and thus no dependency violation
+e.g., we can prove that a reference never escapes and no alias is constructed and thus no dependency violation
 can occur. But it is not clear yet how to best identify these situations. And perhaps some additional annotations
 could help the compiler to better reason about safety.
 
