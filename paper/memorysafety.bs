@@ -59,8 +59,8 @@ in Rust makes accessing C++ objects problematic, and the programming patterns of
 Less radical approaches suggest bringing lifetime annotations to C++, which would allow the compiler to detect frequent causes of bugs.
 That is a good idea, but not sufficient for the general case. We want that the compiler guarantees memory safety, having a linter
 that catches common problems is not good enough. Note that we will frequently only be able to guarantee memory safety in new code that
-helps the compiler with proving that the code is safe. But that is okay as long as new that code can be introduced piece wise, there must
-be a seamless interaction between the large existing code and new code.
+helps the compiler with proving that the code is safe. But that is okay as long as that code can be introduced piece by piece, since there
+must be seamless interaction between the large existing code and new code.
 
 In particular, it is not an option to simply introduce the Rust borrow checker in C++. It is fundamentally incompatible with common
 C++ idioms like, e.g., iterators. Enforcing the Rust rules would require a very different program style, and would not naturally
