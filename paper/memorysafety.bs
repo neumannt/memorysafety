@@ -1,17 +1,22 @@
 <pre class='metadata'>
 Title: Towards memory safety in C++
 Shortname: D2771
-Revision: 0
+Revision: 1
 Audience: EWG
 Status: D
 Group: WG21
 !URL: https://wg21.link/D2771/0
 !Source: <a href="https://github.com/neumannt/memorysafety/blob/master/paper/memorysafety.bs">https://github.com/neumannt/memorysafety/blob/master/paper/memorysafety.bs</a>
 Editor: Thomas Neumann, TUM, thomas.neumann@in.tum.de
-!Date: 2022-12-22
+!Date: 2022-05-23
 Markup Shorthands: markdown yes
 Abstract: The lack of memory safety is one of the most concerning limitations of C++. This paper discusses a mechanism to make C++ memory safe while still keeping the traditional C++ programming concepts. By keeping track of dependencies between objects we can guarantee that an object will not be used after its dependencies have been destroyed or invalidated, which gives us temporal memory safety.
 </pre>
+
+Revision History {#history}
+===========================
+
+R1 more precise dependency declarations, separate compile time from runtime checks more clearly, discuss interfaces
 
 Introduction {#intro}
 =====================
@@ -39,7 +44,7 @@ int main() {
    cout << s2.length() << " " << s2 << endl;
 }</xmp>
 
-It is clearly an example of unsafe behavior, as the second print produces garbage output. In the case of
+None of the currently sanitizers report a problem here, but it is clearly an example of unsafe behavior, as the second print produces garbage output. In the case of
 `string` and `string_view` that is still relatively benign, as we only print nonsense in that case. But we
 could construct similar examples with `vector` and `span` where truly bad things would happen.
 The difficulty that the sanitizers have is that they do not understand the semantics of the operations. The
@@ -125,8 +130,13 @@ that is also marked with `memorysafety`. When calling code that is not marked as
 are disabled and the result is assumed to be globally valid. To help with migration a compiler could emit
 a warning for such a call.
 
-Within a memory safety region the compiler guarantees that no reference to a destroyed object is
-dereferenced. Note that this is weaker than the Rust borrow checker requirement, which mandates that
+Within a memory safety region the compiler guarantees that no objects are used whose dependencies have been invalidated.
+We distinguish two kinds of dependencies:
+1. a dependency on the __existance__ of an object. Typical example are pointers, we must not dereference a pointer that points to an destroyed object
+2. a dependency on the __content__ of an object. Typical examples are `string_view` or iterators, we must not use a string view after then underlying string has been been modified (or destroyed).
+
+An object whose dependencies have been invalidated must not be used except for trivial destructors.
+Note that this is weaker than the Rust borrow checker requirement, which mandates that
 no reference to a destroyed object exists. But requiring that would be incompatible with C++ iterators,
 as seen below:
 
@@ -144,7 +154,17 @@ void foo(vector<int>& a) {
 }
 </xmp>
 
-That is non-trivial to guarantee in general, thus we now discuss the annotations
+That is non-trivial to guarantee in general, thus we now discuss the mechanisms to
+allow the compiler to reason about dependencies. We distinguish compile time checks
+and runtime checks. We need both, unfortunately, for full memory safety, but common
+programming mistakes can already be caught with pure compile time checks.
+We assume a compiler will offer to switch between full memory safety and compile time
+only checks for systems where the runtime overhead is unacceptable.
+
+Compile Time Checks {#compiletime}
+==================================
+
+
 that we need for the compiler to deduce safety. We start with the problem of aliasing.
 Note that in the following we will use the term reference to mean both pointers and
 references. To simplify the discussion we also pretend as if every modification of
@@ -170,8 +190,8 @@ void foo(vector<int>& a, const vector<int>& b) {
 The code looks innocent, but it is actually unsafe when `a` and `b` are aliasing each other.
 We could add a check for that to `foo`, but we want that code is safe by default. Thus, in memory
 safe code, we introduce an aliasing requirement:
-**When passing a non-const reference to a function or method, no other reference may alias that non-cost reference**.
-Violations of that requirements are rejected by the compiler. Note that the implicit `this` parameter is a reference, too.
+**When passing a non-const reference to a function or method, no other reference may alias that non-const reference**.
+Violations of that requirements are rejected by the compiler. Note that the implicit `this` argument is a reference, too.
 
 Consider these examples, calling the function `foo` from above:
 
@@ -231,7 +251,7 @@ lifetimes.
 Lifetimes are modeled as dependencies.
 A global object has an infinite lifetime, i.e., every object can depend on a global object. (For now we ignore the problem of global constructor/destructor order, this might require more thoughts in the future).
 A local object has a lifetime defined by its scope. When a local object is destroyed, all objects that depend upon that object must
-a) have trivial destructors, and b) no methods must be called on that object.
+a) have trivial destructors, and b) no methods must be called on the depending object.
 Consider the example below:
 
 <xmp>
@@ -249,8 +269,8 @@ void foo() {
 </xmp>
 
 When passing data from outside to a function we sometimes need explicit lifetime annotations.
-If none are given, we require that the lifetime of no reference parameter must depend on the
-lifetime of a non-cost parameter reference (or non-const global). Consider the example below:
+If none are given, we require that the lifetime of no reference argument may depend on the
+lifetime of a non-const reference argument (or non-const global). Consider the example below:
 
 <xmp>
 void bar(int* x),
@@ -268,7 +288,7 @@ used after `x` has been destroyed. If we want to allow that, we have to annotate
 function to propagate the dependency:
 
 <xmp>
-void foo(int& x, [[maycapture(x)]] int*& y) {
+void foo(int& x, [[maycapture(&x)]] int*& y) {
    // ok, the caller can check the lifetimes of x and y
    *y = &x;
 }
@@ -303,8 +323,8 @@ A must not be used after a non-const method of B has been invoked**. Note that a
 destructor counts as use. This affects objects like `span`, `string_view`, and iterators that do
 not own the underlying object, but that have to be invalidated when the underlying object is modified.
 
-Conceptually this is a simple rule that says that an object state is modified only by a non-cost method,
-thus all objects that depend upon the state of an object become invalid once a non-cost method is invoked.
+Conceptually this is a simple rule that says that an object state is modified only by a non-const method,
+thus all objects that depend upon the state of an object become invalid once a non-const method is invoked.
 In practice there are some difficulties, though, as sometimes methods are intentionally non-const even though
 they do not modify the state of an object. The most prominent ones are `begin` and `end`, which do not modify
 the container itself, but that do provide non-const access to container elements. Clearly, we do not want
@@ -343,11 +363,109 @@ and just introduce an annotation to allow this dependency:
 
 <xmp>
 template<class InputIt>
-[[dependson(*this)]] iterator insert([[maydependon(this)]] const_iterator pos, InputIt first, InputIt last);
+[[dependson(*this)]] iterator insert([[maydependon(*this)]] const_iterator pos, InputIt first, InputIt last);
 </xmp>
 
-Dynamic Checks {#dynamicchecks}
+Annotating Types {#annotations}
+-------------------------------
+
+To automate the compile time checks, the compiler has to recognize the dependencies that occur within
+a program. For that, we first need a notion of a dependency-carrying type, which we call a `reference` here.
+Regular pointers and references are implicitly considered a reference. User defined types must be annotated
+as reference carrying if they capture dependencies:
+
+<xmp>
+// We need an annotation here
+class [[references]] Class1 {
+   Foo* x;
+   public:
+   [[maycapture(nx)]] void set_x(Foo* nx) { x=nx; };
+   ...
+};
+// No annotation is needed here, we do not capture
+class Class2 {
+   Foo* pimpl = new Foo();
+   public:
+   ...
+};
+</xmp>
+
+With that, the compiler recognizes objects that potentially depend on other objects whose lifetime they
+do not control. This information is used for the three cases of capturing annotations:
+
+<xmp>
+// We make a copy of x
+[[maycapture(x)]] void foo1(Foo& x);
+// We keep the address of x
+[[maycapture(&x)]] void foo2(Foo& x);
+// We keep the address of x and the content of x must not change
+// (e.g., because we store an iterator)
+[[maycapture(*x)]] void foo3(Foo& x);
+</xmp>
+
+Note that the annotation of `foo1` is a no-op if `x` is not itself marked as reference, as capturing
+a non-reference cannot create new dependencies. Nevertheless we need these annotations for generic
+programming, as x might sometimes be a reference. Inversely, an object `a` is only allowed to capture
+an object `b` if `a` is marked as `references`, as this tells the compiler to keep track of dependencies.
+
+Defining Interfaces {#interfaces}
+---------------------------------
+
+Dependency annotations are challenging when defining generic interfaces, like virtual functions, function pointers
+or in generic programming. The first question is, should the dependency annotations be part of the type system?
+That is, is the type of `void foo(int** a, int& b)` different from `void bar([[maycapture(&b)]] int** a, int& b)`?
+From a safety perspective it makes sense to treat them differently, but if we allow overloading based upon
+dependency annotations that clashes with the rule that it is safe to ignore all C++ attributes.
+Thus, for now we do not consider them part of the type system when overloading, but the compiler should refuse
+to cast a function type into another unless the capture set is a super set of the original captures.
+
+For virtual functions we have same behavior, it is permitted to capture less than the base class but not to capture more:
+
+<xmp>
+class [[references]] Base {
+   [[maycapture(&x)]] virtual void foo(Foo& x, Bar& y) = 0;
+};
+class Derived1 : public Base {
+   [[maycapture(&x)]] void foo(Foo& x, Bar& y) override; // ok, we capture the same
+};
+class Derived2 : public Base {
+   void foo(Foo& x, Bar& y) override; // ok, we capture less
+};
+class Derived3 : public Base {
+   [[maycapture(&y)]] void foo(Foo& x, Bar& y) override; // error, we capture more or different
+};
+</xmp>
+
+With generic programming we have the problem that we do not even know if the values that we are handling
+carry dependencies themselves. To cover this, we extend the `[[references]]` attribute into
+a `[[references(A,B,C,...)]]` attribute to express that the type is referencing another if any of the `A,B,C,...` list
+is a reference. With that, we can provide an interface for a generic vector, which shows the different annotations that we need:
+
+<xmp>
+template <class T>
+class [[references(T)]] my_vec {
+   ...
+   /// We copy x, which might or might not propagate a dependency
+   [[maycapture(x))]] void push(const T& x);
+   ...
+   class [[references]] iterator { ... };
+   ...
+   [[dependson(*this),nonmutating]] iterator begin();
+   ...
+};
+</xmp>
+
+To summarize, the interface has to tell the compiler 1) what is a reference like type, and 2) when to we create or store a reference to what.
+No annotations are needed when an argument is simply used inside a function and no reference escapes the call, which will be the
+majority of function calls.
+
+Runtime Checks {#dynamicchecks}
 ===============================
+
+For fully memory safety it is unfortunately unavoidable to perform some runtime checks, which we will discuss next.
+In contrast to the compile time checks they cause runtime overhead, and thus it has to be possible to disable them.
+Some users might only want to enable them in debug builds to find potential dependency violations, as that will
+already find most problems in practice.
 
 The rules discussed so far are useful for catching many common temporal memory safety bugs, but they
 are unfortunately not sufficient to catch all of them at compile time. Perhaps somewhat surprisingly,
@@ -364,7 +482,7 @@ void f1() {
    f4(c);
    f5(b);
 }
-void f2(A& a, [[maycapture(a)]] B& b, [[maycapture(a)]] C& c) {
+void f2(A& a, [[maycapture(&a)]] B& b, [[maycapture(&a)]] C& c) {
    b.a=&a;
    c.a=&a;
 }
@@ -379,7 +497,7 @@ void f5(B& b) {
 }
 </xmp>
 
-Considered in isolation, none of the functions violates any lifetime rules. `a` outlives `b` and `c`, `f2` is properly annotated as capturing,
+Considered in isolation, none of the functions violate any lifetime rules. `a` outlives `b` and `c`, `f2` is properly annotated as capturing,
 and each function is harmless in itself. But the combination clearly violates memory safety because `f4` invalidates the iterator
 constructed in `f3`, and the compiler has no chance to detect that, at least if the functions are defined in different compilation units,
 as `b` and `c` are separate objects.
@@ -408,7 +526,7 @@ void f1() {
    memorysafety::mark_destroyed(&b);
    memorysafety::mark_destroyed(&a);
 }
-void f2(A& a, [[maycapture(a)]] B& b, [[maycapture(a)]] C& c) {
+void f2(A& a, [[maycapture(&a)]] B& b, [[maycapture(&a)]] C& c) {
    memorysafety::add_dependency(&b, &a);
    b.a=&a;
    memorysafety::add_dependency(&c, &a);
