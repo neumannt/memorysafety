@@ -8,7 +8,7 @@ Group: WG21
 !URL: https://wg21.link/D????
 !Source: <a href="https://github.com/neumannt/memorysafety/blob/master/paper/comparison.bs">https://github.com/neumannt/memorysafety/blob/master/paper/comparison.bs</a>
 Editor: Thomas Neumann, TUM, thomas.neumann@in.tum.de
-!Date: 2022-05-23
+!Date: 2023-06-16
 Markup Shorthands: markdown yes
 Abstract: The lack of memory safety in C++ is a great concern and a frequent cause of safety bugs. Different approaches have been propose to reduce or ideally eliminate memory safety bugs, but none of them have been widely adopted yet. In this paper we look at different proposals for C++ and compare their strength and weaknesses, and we also look at what other programming languages do to guarantee memory safety.
 </pre>
@@ -17,29 +17,29 @@ Abstract: The lack of memory safety in C++ is a great concern and a frequent cau
 Introduction {#intro}
 =====================
 
-C and C++ have a reputation as unsafe languages. For C++ that is less justified than for C, as modern C++ provides smart points and many other constructs
+C and C++ have a reputation as unsafe languages. For C++ that is less justified than for C, as modern C++ provides smart pointers and many other constructs
 that help with writing safe code, but even a disciplined programmer can easily make mistakes that lead to dangling pointers or out of bounds accesses in C++.
 And that is true even in modern C++ code bases that largely avoid manual memory management.
-This lack of memory safety is a great concern, and has led some companies and even government to advocate against using C++, at least for new projects.
-Several techniques have been introduced or proposed to mitigate this lack of safety. In this paper provides an overview over different techniques for C++, and also some
+This lack of memory safety is a great concern, and has led some companies and even governments to advocate against using C++, at least for new projects.
+Several techniques have been introduced or proposed to mitigate this lack of safety. This paper provides an overview over different techniques for C++, and also some
 techniques used by other programming languages.
 
-Before comparing different approaches we first have to define what we mean by "memory safety". Informally we could say that we want to prevent all accesses to invalid memory.
-But in practice that is not strong enough, we also want to prevent things like pointer confusion where we follow a pointer to valid memory, but the content
+Before comparing different approaches we first have to define what we mean by "memory safety". Informally, we could say that we want to prevent all accesses to invalid memory.
+But, in practice, that is not strong enough; we also want to prevent things like pointer confusion where we follow a pointer to valid memory, but the content
 of the memory is not what we expected. It is useful to split memory safety into two dimensions:
 
 1. temporal memory safety. We must not follow a pointer after the target object has been destroyed.
 2. spatial memory safety. Pointer arithmetic or array accesses must not go beyond the range of the target array.
 
-If we can guarantee that we never access invalid memory and the memory that we do access has the intended target object.
-Note that there is somewhat related third dimension here, that of thread safety. In theory temporal and spatial memory safety are sufficient,
+If we satisfy both requirements, we can guarantee that we never access invalid memory and the memory that we do access has the intended target object.
+Note that there is a somewhat related third dimension here, that of thread safety. In theory, temporal and spatial memory safety are sufficient,
 even in the presence of data races. But in practice it will often be difficult to guarantee temporal memory safety unless thread safety is guaranteed, too.
 
 C++ by default offers none of these properties. To become a memory safe language, it has to guarantee both temporal and spatial memory safety,
 and most likely also has to handle thread safety in some manner. And this guarantee has to hold at all times. It is not sufficient to detect
 some common programming mistakes, these guarantees have to hold for all programs, as otherwise memory bugs will not go away.
 Having said that, there will always be a need to disable the safety mechanisms in some hopefully well checked code.
-For example some low-level programs need the ability to cast an arbitrary integer into a pointer, and these kinds of operations will always
+For example, some low-level programs need the ability to cast an arbitrary integer into a pointer, and these kinds of operations will always
 be unsafe. But these are easy to detect and flag by the compiler, and will require an explicit opt-in to unsafe operations.
 No simple programming mistake should lead to memory safety bugs.
 
@@ -58,8 +58,8 @@ In Java for example objects are destroyed only when they are no longer reachable
 which solves the temporal memory safety issue. For spatial memory safety Java introduces mandatory bounds
 checks.
 
-For C++ garbage collection is not a great fit. It largely prevents stack allocations unless we can prove that
-a pointer does not escape, and it does not work well with destructors. (Note that the Java finalize method has
+For C++, garbage collection is not a great fit. It largely prevents stack allocations unless we can prove that
+the pointer to that allocation does not escape, and it does not work well with destructors. (Note that the Java finalize method has
 a different semantic). Nevertheless, there have been proposals to add garbage collection to C++, for example [[N2310]].
 These proposals do not offer fully memory safety, though, as they do not prevent for dangling pointers
 to stack allocated objects. It is unlikely that garbage collection will ever be added to C++, even the minimal support
@@ -69,7 +69,7 @@ Sanitizers {#sanitizers}
 ========================
 
 Problems with memory safety have been so frequent that many compilers offer support for detecting them
-at runtime. The ASan address sanitizer is supported by gcc, clang, and MSVC, similar approaches exist
+at runtime. The ASan address sanitizer is supported by gcc, clang, and MSVC. Similar approaches exist
 for example in the old Borland C++ compiler or with Valgrind as external tool. Fundamentally these
 sanitizers keep track of allocated memory and check on memory access if the target memory is still
 valid. This catches many, but not all temporal memory bugs. For example the approach fails if, by
@@ -94,11 +94,11 @@ void bar() { Foo f; foo(f, 4); }
 </xmp>
 
 Admittedly gcc gives a compiler warning when enabling optimization, but that is just because the code is
-so simple that the compiler sees then out-of-bounds access during inlining. Fundamentally the sanitizers
+so simple that the compiler sees then out-of-bounds access during inlining. Fundamentally, the sanitizers
 do not really understand the layout of the memory objects and thus cannot detect the memory corruption
 happening here.
 
-Interestingly the old CodeGuard logic or the gcc mudflap checker would have been able to detect that
+Interestingly, the old CodeGuard logic or the gcc mudflap checker would have been able to detect that
 problem, but at the price of an intrusive change: They used fat pointers to keep track of the valid
 memory ranges, which allows for sub-object granularity, but is very problematic for compatibility reasons.
 
@@ -154,7 +154,7 @@ are clearly accessing a dangling pointer here. And there is no way this can be d
 now know what bar is doing if the two functions are in different translation units.
 
 A similar but even more unpleasant situation happens if two pointers alias each other. Then the pset
-computation approach break down as it does not recognize that the pointer set was increased via
+computation approach breaks down as it does not recognize that the pointer set was increased via
 the aliasing pointer:
 
 <xmp>
@@ -163,7 +163,7 @@ struct Foo {
     string* a = nullptr;
 };
 struct Bar {
-    Foo* a, *b;
+    Foo *a, *b;
 };
 static void foo() {
     Foo f;
@@ -178,7 +178,7 @@ static void foo() {
 Again the C++ core guidelines checker of MSVC 2022 compiles that code with all checks enabled even though
 it clearly contains a temporal memory violation.
 
-The nice thing about the lifetime profile is that causes no runtime costs and that it detects some
+The nice thing about the lifetime profile is that it causes no runtime costs and that it detects some
 problems at compile time. But it is not sufficient to guarantee full memory safety.
 
 Dependency Tracking {#dependencies}
@@ -186,17 +186,17 @@ Dependency Tracking {#dependencies}
 
 The dependency tracking approach of [[P2771R1]] is, at least conceptually, similar to a hybrid between
 the lifetime profile and garbage collection. It establishes a dependency relationship between a pointer
-and its target object, and when target object is destroyed the incoming pointer is marked as invalid.
+and its target object, and when the target object is destroyed, the incoming pointer is marked as invalid.
 The implementation referenced by [[P2771R1]] implements that with associative data structures, similar to
 a sanitizer, which means that the data layout is unaffected, and the operations take amortized constant time.
-In contrast to the sanitizer the approach is never confused by the memory reuse, as we do not check the
-target memory on access but instead invalidate the incoming pointers when the target memory becomes invalid.
+In contrast to the sanitizer the approach, the [[P2771R1]] implementation is never confused by memory reuse, as it does not check the
+target memory on access but instead invalidates the incoming pointers when the target memory becomes invalid.
 This guarantees full temporal memory safety as long as we do not break the type system via casts. Spatial
 memory safety is guaranteed by enforcing the usage of bounds checked span-like classes.
 
 The downside of this basic dependency tracking is that it introduces runtime costs and that memory bugs are
 only detected at runtime and not at compile time. To mitigate that, [[P2771R1]] keeps tracks of object lifetimes
-and introduces function annotations that made dependencies visible to the caller. For example an annotation of
+and introduces function annotations that make dependencies visible to the caller. For example, an annotation of
 
 <xmp>
 [[maycapture(x)]] Foo::foo(pointer x);
@@ -207,8 +207,8 @@ the target of `x` is destroyed. With these annotations many problems can be dete
 the Example 2 above would be detected at compile time. The aliasing issue in Example 3 would unfortunately only be
 detected at runtime, but nevertheless the approach guarantees full memory safety when runtime checks are enabled.
 
-When the approach was presented in Varna the audience was not so enthusiastic about programmers having to annotate
-their functions. Conceptually we need that information to fix the local-reasoning problem of the lifetime profile.
+When the approach was presented in Varna, the audience was not so enthusiastic about programmers having to annotate
+their functions. Conceptually, we need that information to fix the local-reasoning problem of the lifetime profile.
 But Bruno Lopes pointed out that most of the annotations could be computed automatically by the compiler, as
 the the compiler knows after all if a pointer is captured or not. This would make the approach much easier to
 use in practice.
@@ -226,7 +226,7 @@ pub fn first<'a>(data: &'a [Item]) -> Option<&'a Item>
 </xmp>
 
 Now the compiler makes sure that the lifetime of the resulting reference does not exceed the lifetime of the
-incoming. Note that for clarity reasons we have given the lifetime an explicit name here, `'a. In simple cases Rust allows for omitting
+incoming array. Note that for clarity reasons we have given the lifetime an explicit name here, `'a. In simple cases Rust allows for omitting
 the explicit lifetime annotations if the default behavior is sufficient.
 
 Representing lifetimes in the type system is very powerful, as we can express very precisely which entry depends on
@@ -234,12 +234,12 @@ what and the compiler can guarantee statically that the lifetime of the dependen
 of the target object. This alone is not sufficient for full memory safety, though, as aliasing would break that just as the lifetime profiles discussed above.
 To fix the aliasing problem, Rust uses the borrow checker to enforce the rule that at any point in time there can be at most one
 reference to a mutable object. Which means that there can be no aliases when an object is modified, which eliminates the whole problem.
-The lifetime annotations combined with the borrow checker guarantee temporal memory safety, for spatial memory safety
+The lifetime annotations combined with the borrow checker guarantee temporal memory safety. For spatial memory safety,
 Rust introduces mandatory bounds checks at runtime.
 
 The disadvantage of that approach is that it is fundamentally incompatible with existing C++ coding practice.
 Non-const iterators for example are widely used in C++, but are incompatible with the Rust model that forbids multiple
-mutable references to the same object. Migrating an existing code base to such a programming model is a daunting task,
+references to the same mutable object. Migrating an existing code base to such a programming model is a daunting task,
 all data structures and algorithms have to be adapted to cope with the restrictions of such an ownership model.
 
 
@@ -249,9 +249,9 @@ Conclusion {#conclusion}
 Providing a memory safe mode for C++ is a challenging task. The Rust model is not compatible with existing
 coding practice, garbage collection is not an option for a variety of reasons, sanitizers detect some problems but miss others,
 and the same is true for the lifetime profile of the C++ core guidelines. The dependency tracking approach of [[P2771R1]] does
-offer full memory safety, but committee rather wanted to have something else.
+offer full memory safety, but the committee rather wanted to have something else.
 Whatever that will be, in order to provide full memory safety it 1) will have to deal with non-local reasoning over pointer dependencies, and 2) will have to find an answer to the aliasing problem.
-Both is necessary for correctness, and it will have some cost associated, either for the programmer or at runtime.
+Both is necessary for correctness, and it will have some associated cost, either for the programmer or at runtime.
 
 <pre class=biblio>
 {
